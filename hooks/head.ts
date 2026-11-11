@@ -339,20 +339,7 @@ function d(lines: P3[][], cam: Cam): string {
 }
 /** shell lines split into the half facing us and the half behind */
 function shellD(lines: P3[][], cam: Cam): [string, string] {
-  const front: P3[][] = [], back: P3[][] = []
-  for (const l of lines) {
-    let run: P3[] = [], f = facing(l[0]!, cam)
-    for (const p of l) {
-      const pf = facing(p, cam)
-      if (pf !== f) {
-        run.push(p)
-        if (run.length > 1) (f ? front : back).push(run)
-        run = [p]
-        f = pf
-      } else run.push(p)
-    }
-    if (run.length > 1) (f ? front : back).push(run)
-  }
+  const [front, back] = splitFacing(lines, cam)
   return [d(front, cam), d(back, cam)]
 }
 
@@ -398,70 +385,197 @@ function moveFor(show: Show): Move {
   return (['bounce', 'sway', 'headbang', 'bounce', 'sway', 'flip'] as const)[show.id % 6] ?? 'bounce'
 }
 
+/** One animated value: its keyframes, how long one cycle takes, and whether it plays once. */
+type Track = { values: number[][]; dur: number; once?: boolean; keyTimes?: number[] }
 /**
- * Wraps the head in groups that dance to the beat: a translate and a rotation about the neck,
- * and a scale about the neck's base (a squash, or a flip that reads as a spin).
+ * A dance: a translate, a rotation (about the neck, or the middle of the head to go upside
+ * down) and a scale about the neck's base (a squash, or a flip that reads as a spin). The
+ * SVG animates it with SMIL; the terminal samples it frame by frame.
  */
-function dance(show: Show, px: number, py: number, cx: number, T: number): [string, string] {
-  const P = `${num(px)} ${num(py)}`
-  // the middle of the head, for turning it upside down
-  const C = `${num(cx)} ${num(HH / 2 - 20)}`
-  if (show.mode !== 'sing') {
-    const doze = `<animateTransform attributeName="transform" type="rotate" values="0 ${P};2.5 ${P};0 ${P}" dur="6s" repeatCount="indefinite"/>`
-    return [`<g>${doze}`, '</g>']
-  }
+type Choreo = { translate?: Track; rotate?: Track & { pivot: 'neck' | 'center' }; scale?: Track }
+
+function choreo(show: Show, T: number): Choreo {
+  if (show.mode !== 'sing') return { rotate: { values: [[0], [2.5], [0]], dur: 6, pivot: 'neck' } }
   const beat = Math.max(0.2, show.beat)
-  const reps = (dur: number) => Math.max(1, Math.ceil(T / dur))
-  const splines = (n: number) => Array.from({ length: n }, () => '.45 0 .3 1').join(';')
-  const anim = (type: 'translate' | 'rotate' | 'scale', values: string[], dur: number, opts: { once?: boolean; sum?: boolean; keyTimes?: string } = {}) =>
-    `<animateTransform attributeName="transform" type="${type}" values="${values.join(';')}" dur="${f3(dur)}s" repeatCount="${opts.once ? 1 : reps(dur)}" calcMode="spline" keySplines="${splines(values.length - 1)}"${opts.keyTimes ? ` keyTimes="${opts.keyTimes}"` : ''}${opts.sum ? ' additive="sum"' : ''}/>`
-  const rot = (deg: number[]) => deg.map(d => `${d} ${P}`)
-  const turn = (deg: number[]) => deg.map(d => `${d} ${C}`)
-  let move = '', scale = ''
+  const tr = (v: number[][], dur: number, extra: Partial<Track> = {}): Track => ({ values: v, dur, ...extra })
+  const rot = (deg: number[], dur: number, pivot: 'neck' | 'center', extra: Partial<Track> = {}) => ({ values: deg.map(d => [d]), dur, pivot, ...extra })
   switch (moveFor(show)) {
-    case 'bounce':
-      move = anim('translate', ['0 0', '0 -26', '0 0'], beat)
-      scale = anim('scale', ['1 1', '0.97 1.03', '1.03 0.96', '1 1'], beat)
-      break
-    case 'sway':
-      move = anim('translate', ['0 0', '-22 -6', '0 0', '22 -6', '0 0'], beat * 2) + anim('rotate', rot([0, -6, 0, 6, 0]), beat * 2, { sum: true })
-      break
-    case 'headbang':
-      move = anim('rotate', rot([0, 11, 0]), beat) + anim('translate', ['0 0', '6 12', '0 0'], beat, { sum: true })
-      break
-    case 'tilt':
-      // a quizzical tilt, held, with a little bob on the beat
-      move = anim('rotate', rot([0, -12, -12, -8, -12, 0]), T, { once: true, keyTimes: '0;.12;.45;.6;.85;1' }) + anim('translate', ['0 0', '0 -8', '0 0'], beat, { sum: true })
-      break
-    case 'spin':
-      move = anim('translate', ['0 0', '0 -20', '0 0'], beat)
-      scale = anim('scale', ['1 1', '-1 1', '1 1'], Math.min(T, beat * 4), { once: true })
-      break
-    case 'shake':
-      // the twitch of a head that has seen too many stack traces
-      move = anim('translate', ['0 0', '-9 4', '8 -5', '-6 -3', '7 5', '0 0'], 0.42) + anim('rotate', rot([0, -4, 5, -3, 4, 0]), 0.42, { sum: true })
-      break
-    case 'flip':
-      // over the top and back on its feet
-      move = anim('rotate', turn([0, 180, 180, 360]), Math.min(T, Math.max(2.4, beat * 6)), { once: true, keyTimes: '0;.25;.7;1' })
-      break
-    case 'upside':
-      // upside down for most of the line, wobbling, then back
-      move = anim('rotate', turn([0, 180, 168, 192, 175, 180, 0]), T, { once: true, keyTimes: '0;.1;.3;.5;.7;.88;1' })
-      break
-    case 'cartwheel':
-      move = anim('rotate', turn([0, 120, 240, 360]), beat * 4) + anim('translate', ['0 0', '0 -18', '0 0'], beat, { sum: true })
-      break
-    case 'groove':
-      move = anim('translate', ['0 0', '-18 -22', '0 0', '18 -22', '0 0'], beat * 2) + anim('rotate', rot([0, -5, 0, 5, 0]), beat * 2, { sum: true })
-      scale = anim('scale', ['1 1', '1 1', '-1 1', '1 1'], beat * 8, { keyTimes: '0;.7;.85;1' })
-      break
+    case 'bounce': return { translate: tr([[0, 0], [0, -26], [0, 0]], beat), scale: tr([[1, 1], [0.97, 1.03], [1.03, 0.96], [1, 1]], beat) }
+    case 'sway': return { translate: tr([[0, 0], [-22, -6], [0, 0], [22, -6], [0, 0]], beat * 2), rotate: rot([0, -6, 0, 6, 0], beat * 2, 'neck') }
+    case 'headbang': return { translate: tr([[0, 0], [6, 12], [0, 0]], beat), rotate: rot([0, 11, 0], beat, 'neck') }
+    // a quizzical tilt, held, with a little bob on the beat
+    case 'tilt': return { translate: tr([[0, 0], [0, -8], [0, 0]], beat), rotate: rot([0, -12, -12, -8, -12, 0], T, 'neck', { once: true, keyTimes: [0, 0.12, 0.45, 0.6, 0.85, 1] }) }
+    case 'spin': return { translate: tr([[0, 0], [0, -20], [0, 0]], beat), scale: tr([[1, 1], [-1, 1], [1, 1]], Math.min(T, beat * 4), { once: true }) }
+    // the twitch of a head that has seen too many stack traces
+    case 'shake': return { translate: tr([[0, 0], [-9, 4], [8, -5], [-6, -3], [7, 5], [0, 0]], 0.42), rotate: rot([0, -4, 5, -3, 4, 0], 0.42, 'neck') }
+    // over the top and back on its feet
+    case 'flip': return { rotate: rot([0, 180, 180, 360], Math.min(T, Math.max(2.4, beat * 6)), 'center', { once: true, keyTimes: [0, 0.25, 0.7, 1] }) }
+    // upside down for most of the line, wobbling, then back
+    case 'upside': return { rotate: rot([0, 180, 168, 192, 175, 180, 0], T, 'center', { once: true, keyTimes: [0, 0.1, 0.3, 0.5, 0.7, 0.88, 1] }) }
+    case 'cartwheel': return { translate: tr([[0, 0], [0, -18], [0, 0]], beat), rotate: rot([0, 120, 240, 360], beat * 4, 'center') }
+    case 'groove': return {
+      translate: tr([[0, 0], [-18, -22], [0, 0], [18, -22], [0, 0]], beat * 2),
+      rotate: rot([0, -5, 0, 5, 0], beat * 2, 'neck'),
+      scale: tr([[1, 1], [1, 1], [-1, 1], [1, 1]], beat * 8, { keyTimes: [0, 0.7, 0.85, 1] }),
+    }
   }
+}
+
+/** where the neck and the middle of the head stand, for a yaw */
+function pivots(yaw: number) {
+  const cam: Cam = { yaw, pitch: -0.12 }
+  const [px, py] = project([0.5, 0, 0], cam)
+  return { px, py, cx: HW / 2, cy: HH / 2 - 20 }
+}
+
+/** The dance as SMIL: groups wrapping the head. */
+function dance(show: Show, T: number): [string, string] {
+  const { px, py, cx, cy } = pivots(show.yaw)
+  const c = choreo(show, T)
+  const reps = (dur: number) => Math.max(1, Math.ceil(T / dur))
+  const anim = (type: 'translate' | 'rotate' | 'scale', track: Track, values: string[], sum: boolean) => {
+    const indefinite = show.mode !== 'sing'
+    const splines = Array.from({ length: values.length - 1 }, () => '.45 0 .3 1').join(';')
+    return `<animateTransform attributeName="transform" type="${type}" values="${values.join(';')}" dur="${f3(track.dur)}s" repeatCount="${indefinite ? 'indefinite' : track.once ? 1 : reps(track.dur)}" calcMode="spline" keySplines="${splines}"${track.keyTimes ? ` keyTimes="${track.keyTimes.map(f3).join(';')}"` : ''}${sum ? ' additive="sum"' : ''}/>`
+  }
+  let move = ''
+  if (c.translate) move += anim('translate', c.translate, c.translate.values.map(v => `${v[0]} ${v[1]}`), false)
+  if (c.rotate) {
+    const [ox, oy] = c.rotate.pivot === 'neck' ? [px, py] : [cx, cy]
+    move += anim('rotate', c.rotate, c.rotate.values.map(v => `${v[0]} ${num(ox)} ${num(oy)}`), !!c.translate)
+  }
+  const scale = c.scale ? anim('scale', c.scale, c.scale.values.map(v => `${v[0]} ${v[1]}`), false) : ''
   return [
     `<g>${move}<g transform="translate(${num(cx)} ${num(py)})"><g>${scale}<g transform="translate(${num(-cx)} ${num(-py)})">`,
     '</g></g></g></g>',
   ]
 }
+
+// ------------------------------------------------------------------ the same head, frame by frame (the terminal)
+
+const ease = (u: number) => u * u * (3 - 2 * u)
+function sample(track: Track, t: number, T: number): number[] {
+  const n = track.values.length
+  let local = track.once ? Math.min(t, track.dur) : t >= Math.max(1, Math.ceil(T / track.dur)) * track.dur ? track.dur : t % track.dur
+  if (local < 0) local = 0
+  const u = local / track.dur
+  const times = track.keyTimes ?? track.values.map((_, i) => i / (n - 1))
+  for (let i = 1; i < n; i++) {
+    if (u <= (times[i] ?? 1)) {
+      const t0 = times[i - 1] ?? 0, t1 = times[i] ?? 1
+      const w = ease(t1 > t0 ? (u - t0) / (t1 - t0) : 1)
+      const a = track.values[i - 1]!, b = track.values[i]!
+      return a.map((v, k) => v + ((b[k] ?? v) - v) * w)
+    }
+  }
+  return track.values[n - 1]!
+}
+
+/** The dance at time t, as a function that moves a point of the drawing. */
+export function danceAt(show: Show, t: number): (x: number, y: number) => [number, number] {
+  const T = Math.max(0.1, show.dur)
+  const { px, py, cx, cy } = pivots(show.yaw)
+  const c = choreo(show, T)
+  const [sx, sy] = c.scale ? sample(c.scale, t, T) : [1, 1]
+  const deg = c.rotate ? sample(c.rotate, t, T)[0] ?? 0 : 0
+  const [ox, oy] = c.rotate?.pivot === 'center' ? [cx, cy] : [px, py]
+  const [tx, ty] = c.translate ? sample(c.translate, t, T) : [0, 0]
+  const a = (deg * Math.PI) / 180, cs = Math.cos(a), sn = Math.sin(a)
+  return (x, y) => {
+    const x1 = cx + (x - cx) * (sx ?? 1), y1 = py + (y - py) * (sy ?? 1)
+    const dx = x1 - ox, dy = y1 - oy
+    return [ox + dx * cs - dy * sn + (tx ?? 0), oy + dx * sn + dy * cs + (ty ?? 0)]
+  }
+}
+
+/** Which mouth shape is showing at time t (the keyframe nearest in time). */
+export function poseAt(show: Show, t: number): number {
+  const k = show.keys
+  if (show.mode !== 'sing' || k.length === 0) return 0
+  for (let i = 1; i < k.length; i++) {
+    const [t1, p1] = k[i]!
+    if (t < t1) {
+      const [t0, p0] = k[i - 1]!
+      return (t - t0) / Math.max(1e-6, t1 - t0) < 0.5 ? p0 : p1
+    }
+  }
+  return k[k.length - 1]![1]
+}
+
+/** A projected polyline in one of the palette's colors. */
+export type Stroke = { pts: Pt[]; color: string }
+export type Scene = { still: Stroke[]; poses: Stroke[][]; eyesOpen: Stroke[]; eyesShut: Stroke[]; mouth: Pt }
+
+function eyeLines(): { iris: P3[][]; pupil: P3[][]; lid: P3[][] } {
+  const out = { iris: [] as P3[][], pupil: [] as P3[][], lid: [] as P3[][] }
+  for (const { c, side } of build().eyes) {
+    const iris: P3[] = [], pupil: P3[] = [], lid: P3[] = []
+    for (let i = 0; i <= 18; i++) {
+      const a = (i / 18) * Math.PI * 2
+      iris.push([c[0] + 1.0, c[1] + 0.72 * Math.sin(a), c[2] + 0.72 * Math.cos(a) + side * 0.15])
+      pupil.push([c[0] + 1.05, c[1] + 0.28 * Math.sin(a), c[2] + 0.28 * Math.cos(a) + side * 0.15])
+      if (i <= 9) lid.push([c[0] + 1.05, c[1] + 0.1 - 0.12 * Math.sin((i / 9) * Math.PI), c[2] + 0.75 * Math.cos((i / 9) * Math.PI) + side * 0.15])
+    }
+    out.iris.push(iris)
+    out.pupil.push(pupil)
+    out.lid.push(lid)
+  }
+  return out
+}
+
+function splitFacing(lines: P3[][], cam: Cam): [P3[][], P3[][]] {
+  const front: P3[][] = [], back: P3[][] = []
+  for (const l of lines) {
+    let run: P3[] = [], f = facing(l[0]!, cam)
+    for (const p of l) {
+      const pf = facing(p, cam)
+      if (pf !== f) {
+        run.push(p)
+        if (run.length > 1) (f ? front : back).push(run)
+        run = [p]
+        f = pf
+      } else run.push(p)
+    }
+    if (run.length > 1) (f ? front : back).push(run)
+  }
+  return [front, back]
+}
+
+const scenes = new Map<number, Scene>()
+/** Every line of the head for one view, projected, in drawing order: what the terminal draws. */
+export function scene(yaw: number): Scene {
+  const hit = scenes.get(yaw)
+  if (hit) return hit
+  const cam: Cam = { yaw, pitch: -0.12 }
+  const g = build()
+  const flat = (lines: P3[][], color: string): Stroke[] => lines.map(l => ({ pts: l.map(p => { const [x, y] = project(p, cam); return [x, y] as Pt }), color }))
+  const [front, back] = splitFacing(g.still, cam)
+  const upper = posed(POSES[0]!).teeth
+  const eyes = eyeLines()
+  const made: Scene = {
+    still: [
+      ...flat(back, V.blueDim), ...flat(g.brain, V.blueDim), ...flat(g.neck, V.blueDim), ...flat(g.ears, V.blueMid),
+      ...flat(front, V.blue), ...flat([g.airway], V.amber), ...flat(upper.slice(0, upper.length / 2), V.white),
+    ],
+    poses: POSES.map(pose => {
+      const parts = posed(pose)
+      const [pf, pb] = splitFacing(parts.shell, cam)
+      return [
+        ...flat(pb, V.blueDim), ...flat(pf, V.blue), ...flat(parts.mandible, V.red), ...flat(parts.tongue, V.green),
+        ...flat(parts.teeth.slice(parts.teeth.length / 2), V.white), ...flat(parts.lips, V.pink),
+      ]
+    }),
+    eyesOpen: [...flat(eyes.iris, V.white), ...flat(eyes.pupil, V.white)],
+    eyesShut: flat(eyes.lid, V.white),
+    mouth: (() => { const [x, y] = project([8.6, 8.9, 0], cam); return [x, y] as Pt })(),
+  }
+  if (scenes.size > 12) scenes.clear()
+  scenes.set(yaw, made)
+  return made
+}
+
+export const LABEL = (show: Show) => KIND_LABEL[show.kind]
+export { HW, HH, V }
 
 /** The whole drawing: one head (or two, facing each other, for a duet) and the lyrics. */
 export function headSvg(show: Show, duet: boolean): string {
@@ -496,21 +610,13 @@ export function headSvg(show: Show, duet: boolean): string {
       `<path d="${d(parts.lips, cam)}" stroke="${V.pink}" stroke-width="1.9"/></g>`
   }).join('')
   const upperTeeth = posed(POSES[0]!).teeth
-  const eyes = g.eyes.map(({ c, side }) => {
-    const iris: P3[] = [], pupil: P3[] = [], lid: P3[] = []
-    for (let i = 0; i <= 18; i++) {
-      const a = (i / 18) * Math.PI * 2
-      iris.push([c[0] + 1.0, c[1] + 0.72 * Math.sin(a), c[2] + 0.72 * Math.cos(a) + side * 0.15])
-      pupil.push([c[0] + 1.05, c[1] + 0.28 * Math.sin(a), c[2] + 0.28 * Math.cos(a) + side * 0.15])
-      if (i <= 9) lid.push([c[0] + 1.05, c[1] + 0.1 - 0.12 * Math.sin((i / 9) * Math.PI), c[2] + 0.75 * Math.cos((i / 9) * Math.PI) + side * 0.15])
-    }
-    const open = `<g opacity="${sing ? 1 : 0}">${sing ? '<animate attributeName="opacity" values="1;1;0;1" keyTimes="0;.93;.96;1" dur="3.7s" repeatCount="indefinite"/>' : ''}<path d="${d([iris], cam)}" stroke="${V.white}" stroke-width="1.3"/><path d="${d([pupil], cam)}" stroke="${V.white}" stroke-width="2.4"/></g>`
-    const shut = `<path d="${d([lid], cam)}" stroke="${V.white}" stroke-width="1.6" opacity="${sing ? 0 : 1}">${sing ? '<animate attributeName="opacity" values="0;0;1;0" keyTimes="0;.93;.96;1" dur="3.7s" repeatCount="indefinite"/>' : ''}</path>`
-    return open + shut
-  }).join('')
+  const el = eyeLines()
+  const blink = (open: boolean) => sing ? `<animate attributeName="opacity" values="${open ? '1;1;0;1' : '0;0;1;0'}" keyTimes="0;.93;.96;1" dur="3.7s" repeatCount="indefinite"/>` : ''
+  const eyes =
+    `<g opacity="${sing ? 1 : 0}">${blink(true)}<path d="${d(el.iris, cam)}" stroke="${V.white}" stroke-width="1.3"/><path d="${d(el.pupil, cam)}" stroke="${V.white}" stroke-width="2.4"/></g>` +
+    `<path d="${d(el.lid, cam)}" stroke="${V.white}" stroke-width="1.6" opacity="${sing ? 0 : 1}">${blink(false)}</path>`
   const [mx, my] = project([8.6, 8.9, 0], cam)
-  const neckPivot = project([0.5, 0, 0], cam)
-  const [danceOpen, danceClose] = dance(show, neckPivot[0], neckPivot[1], HW / 2, T)
+  const [danceOpen, danceClose] = dance(show, T)
   const rings = sing
     ? show.onsets.slice(0, 16).map(t => `<circle cx="${num(mx)}" cy="${num(my)}" r="4" stroke="${V.amber}" stroke-width="1.6" opacity="0"><animate attributeName="r" from="6" to="70" begin="${f3(t)}s" dur=".9s"/><animate attributeName="opacity" values=".9;0" begin="${f3(t)}s" dur=".9s"/></circle>`).join('')
     : ''

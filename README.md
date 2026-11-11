@@ -32,7 +32,34 @@ claude plugin install singing-head --marketplace mandel-macaque/singing-head
 
 In the Claude desktop app, where `/plugin` doesn't run: click + next to the prompt box, then Plugins, Add marketplace with `mandel-macaque/singing-head`, then Add plugin.
 
-Then type `/head` to open the pane. The animated head is drawn in the Claude desktop app; a terminal session gets a small ASCII head instead.
+Then type `/head` to open the pane.
+
+### From a clone of the repository
+
+```
+git clone https://github.com/mandel-macaque/singing-head ~/singing-head
+```
+
+Then either install it from that folder, at a Claude Code prompt:
+
+```
+/plugin install singing-head --marketplace ~/singing-head
+```
+
+or run it for one session only, without installing:
+
+```
+claude --plugin-dir ~/singing-head
+```
+
+A `git pull` in that folder brings in later versions.
+
+## Where it draws
+
+- **Claude desktop app:** the animated SVG head fills the side pane.
+- **Terminal:** the same 3D head is drawn in color with braille characters (each character is a 2×4 grid of dots), redrawn ten times a second, with the lyrics underneath. It works in any terminal with a font that has braille; the pane docks beside the transcript in fullscreen mode from 110 columns, and sits above the prompt otherwise.
+
+Sound plays through `afplay` on macOS; elsewhere the head mouths along silently.
 
 ## Chat
 
@@ -63,7 +90,6 @@ The mod's sandbox has no WebAssembly, so it can't run CHIMERA's Rust engine. Ins
 
 It sounds robotic, and that's the point.
 
-Audio plays through the host (`afplay` on macOS). On other systems the head mouths along silently.
 
 ## Credits
 

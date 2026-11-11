@@ -11,6 +11,7 @@ import { headSvg, idleShow, score } from './head'
 import { breaths, compose, funnyQuestion, hasDict, JOKES, LAUGHS, loadDict, pick, RANTS, sentences, songPhrase, SONGS, toolLyric, withName } from './lyrics'
 import type { ComposeOptions } from './lyrics'
 import { sing } from './synth'
+import { termFrame } from './term'
 
 const PANE = 'singing-head'
 const TITLE = 'Singing head'
@@ -62,6 +63,18 @@ let lastToolAt = 0
 const breather = () => (quietUntil = performance.now() + 3500 + Math.random() * 6000)
 /** starts the singer if it is idle (set in session.start) */
 let kick: () => void = () => {}
+
+/** the phrase the pane shows and when it started: the terminal draws the head frame by frame */
+let shownId = -1
+let shownAt = 0
+const markShown = (id: number) => {
+  if (id === shownId) return
+  shownId = id
+  shownAt = performance.now()
+}
+/** the terminal's Raster, while one draws the pane, and what keeps it moving (set in session.start) */
+let term: { cols: number; rows: number } | undefined
+let startTerm: () => void = () => {}
 
 function enqueue(job: Job): void {
   // only the newest line of chatter waits: Claude is faster than any singer
@@ -173,8 +186,6 @@ function svgFor(show: Show, duet: boolean): string {
   return cached.svg
 }
 
-const ASCII_REST = ['   .---.  ', '  /     \\ ', ' |  -   - |', ' |    >    ', '  \\  ___  /', "   '-----' "]
-const ASCII_SING = ['   .---.  ', '  /     \\ ', ' |  o   o |', ' |    >    ', '  \\  (O)  /  ♪', "   '-----' "]
 
 // ------------------------------------------------------------------ hooks
 
@@ -276,6 +287,28 @@ export const register: Register = on => {
     }
     kick = () => {
       if (!busy) $.clock.after(0, () => void pump())
+    }
+    // the terminal's head: ten frames a second while it sings, fewer while it dozes
+    let termTimer: { cancel(): void } | undefined
+    let frame = 0
+    startTerm = () => {
+      if (termTimer) return
+      termTimer = $.clock.every(100, () => {
+        const size = term
+        if (!size) {
+          termTimer?.cancel()
+          termTimer = undefined
+          return
+        }
+        void (async () => {
+          const show = await read($, showAtom)
+          markShown(show.id)
+          if (show.mode !== 'sing' && frame++ % 3 !== 0) return
+          const r = await $.ui.blit({ requestId: PANE, key: 'head', cells: termFrame(show, (performance.now() - shownAt) / 1000, size.cols, size.rows) })
+          // not drawn any more (closed, resized, another surface): the next draw starts it again
+          if (r.deny) term = undefined
+        })().catch(() => (term = undefined))
+      })
     }
 
     const saved = (await $.store.get('prefs')) as Partial<Prefs> | undefined
@@ -485,17 +518,15 @@ export const register: Register = on => {
     const show = await read($, showAtom)
     const prefs = await read($, prefsAtom)
     if (e.surface === 'terminal') {
-      const { Box, Text } = $.ui.resolve(e)
-      const art = show.mode === 'sing' ? ASCII_SING : ASCII_REST
-      return (
-        <Box flexDirection="column">
-          {art.map(line => (
-            <Text color={show.mode === 'sing' ? 'cyan' : 'blue'}>{line}</Text>
-          ))}
-          <Text bold>{show.mode === 'sing' ? `♪ ${show.words.join(' ')} ♪` : 'zzz'}</Text>
-          <Text dimColor>{show.caption}</Text>
-        </Box>
-      )
+      // the same head in braille, sized to the pane's body, kept moving by the frame loop
+      const { Raster } = $.ui.resolve(e)
+      const cols = Math.max(24, Math.min(140, e.props.bodyColumns))
+      const room = e.props.placement === 'inline' ? 30 : 70
+      const rows = Math.max(12, Math.min(room, e.props.scroll.bodyRows, Math.round(cols * 0.64) + 4))
+      markShown(show.id)
+      term = { cols, rows }
+      startTerm()
+      return <Raster key="head" columns={cols} rows={rows} cells={termFrame(show, (performance.now() - shownAt) / 1000, cols, rows)} />
     }
     // just the head, as an image: it scales to the pane's width (the interactive frame keeps
     // a small fixed size) and its SMIL animation still plays; the controls live in /head
