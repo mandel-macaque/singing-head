@@ -1,6 +1,12 @@
 {
   "name": "singing-head",
   "version": "0.1.0",
-  "description": "A wireframe CHIMERA head that sings what Claude is doing while you wait",
+  "description": "A wireframe CHIMERA head that sings, dances and rants while Claude works: it sings your prompt, Claude's messages, tool calls and questions, tells dad jokes, and chats through /head",
+  "author": { "name": "mandel-macaque", "url": "https://github.com/mandel-macaque" },
+  "homepage": "https://github.com/mandel-macaque/singing-head",
+  "repository": "https://github.com/mandel-macaque/singing-head",
+  "license": "MIT",
+  "keywords": ["fun", "music", "voice", "companion", "singing", "chimera"],
+  "icon": "./.claude-plugin/icon.png",
   "types": "./types/index.d.ts"
 }

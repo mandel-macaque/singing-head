@@ -1,5 +1,6 @@
 {
   "name": "singing-head",
-  "owner": { "name": "mandel-macaque" },
+  "description": "The singing head: a CHIMERA wireframe head that sings, dances and rants beside Claude Code",
+  "owner": { "name": "mandel-macaque", "url": "https://github.com/mandel-macaque" },
   "plugins": [{ "name": "singing-head", "source": "./" }]
 }
