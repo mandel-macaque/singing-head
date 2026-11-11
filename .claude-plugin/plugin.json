@@ -1,0 +1,6 @@
+{
+  "name": "singing-head",
+  "version": "0.1.0",
+  "description": "A wireframe CHIMERA head that sings what Claude is doing while you wait",
+  "types": "./types/index.d.ts"
+}
